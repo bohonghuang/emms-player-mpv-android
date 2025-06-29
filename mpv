@@ -1,0 +1,79 @@
+#!/data/data/com.termux/files/usr/bin/bash
+SOCKET_PATH="${MPV_ANDROID_SOCKET_PATH:-/data/data/com.termux/files/home/.emacs.d/emms/mpv-ipc.sock}"
+CONFIG_DIR="${MPV_ANDROID_CONFIG_DIR:-/data/data/is.xyz.mpv/files}"
+
+if [[ ! -d "$CONFIG_DIR" ]]; then
+    mkdir -p "$CONFIG_DIR"
+fi
+
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+
+if [[ ! -f "$CONFIG_DIR/mpv.conf" && -f "$SCRIPT_DIR/mpv.conf" ]]; then
+    cp "$SCRIPT_DIR/mpv.conf" "$CONFIG_DIR/mpv.conf"
+fi
+
+if [[ ! -f "$CONFIG_DIR/mpv.lua" && -f "$SCRIPT_DIR/mpv.lua" ]]; then
+    cp "$SCRIPT_DIR/mpv.lua" "$CONFIG_DIR/mpv.lua"
+fi
+
+if [[ ! -f "$CONFIG_DIR/mpv.png" && -f "$SCRIPT_DIR/mpv.png" ]]; then
+    cp "$SCRIPT_DIR/mpv.png" "$CONFIG_DIR/mpv.png"
+fi
+
+if [ "$1" == "--version" ]; then
+    echo "mpv v0.40.0-dirty Copyright © 2000-2025 mpv/MPlayer/mplayer2 projects"
+    exit 0
+fi
+
+check_socket() {
+    timeout 1 socat -u OPEN:/dev/null UNIX-CONNECT:"$SOCKET_PATH" >/dev/null 2>&1
+    return $?
+}
+
+cleanup() {
+    if check_socket; then
+        echo '{"command": ["quit"]}' | socat - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null
+    fi
+}
+
+monitor_socket() {
+    trap cleanup INT TERM EXIT
+    while true; do
+        if ! check_socket; then
+            exit 0
+        fi
+        sleep 1
+    done
+}
+
+MEDIA_PATH="$1"
+if [ -z "$MEDIA_PATH" ] || ! [ -e "$MEDIA_PATH" ]; then
+    MEDIA_PATH="$CONFIG_DIR/mpv.png"
+fi
+
+if [[ "$MEDIA_PATH" == http://* ]] || [[ "$MEDIA_PATH" == https://* ]]; then
+    URI="$MEDIA_PATH"
+else
+    if [[ "$MEDIA_PATH" != /* ]]; then
+        MEDIA_PATH="$(pwd)/$MEDIA_PATH"
+    fi
+    URI="file://$MEDIA_PATH"
+fi
+
+if check_socket; then
+    if [ -n "$1" ]; then
+        echo '{"command": ["loadfile", "'"$URI"'"]}' | socat - UNIX-CONNECT:"$SOCKET_PATH" 2>/dev/null
+    fi
+    monitor_socket
+else
+    MPV_PACKAGE="is.xyz.mpv"
+    MPV_ACTIVITY=".MPVActivity"
+    am start -n "$MPV_PACKAGE/$MPV_ACTIVITY" \
+        -a android.intent.action.VIEW \
+        -t "video/*" \
+        -d "$URI"
+    sleep 1
+    monitor_socket
+fi
+
+monitor_socket
